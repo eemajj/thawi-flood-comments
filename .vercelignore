@@ -1,0 +1,4 @@
+data.sqlite3*
+run_local.py
+*.command
+*.bat
