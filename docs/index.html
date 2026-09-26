@@ -3,18 +3,37 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
 <title>สรุปคอมเมนต์แจ้งปัญหา</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="static/style.css">
 </head>
 <body>
 <div id="login" class="login" hidden>
   <form id="loginForm" class="login-box">
     <h1>ระบบสรุปคอมเมนต์แจ้งปัญหา</h1>
     <p class="muted">ศูนย์ปฏิบัติการน้ำท่วม · สำนักงานเขตทวีวัฒนา</p>
-    <label>รหัสผ่าน<input type="password" id="pw" autocomplete="current-password" required autofocus></label>
-    <button class="btn primary" type="submit">เข้าสู่ระบบ</button>
+    <p id="loginMsg" class="ok-msg" role="status"></p>
+    <label id="nameRow" hidden>ชื่อ-สกุล / ฝ่าย<input id="name" autocomplete="name" placeholder="เช่น สมชาย (ฝ่ายโยธา)"></label>
+    <label>อีเมล<input type="email" id="email" autocomplete="email" required></label>
+    <label id="pwRow">รหัสผ่าน<input type="password" id="pw" autocomplete="current-password"></label>
+    <button class="btn primary" id="loginBtn" type="submit">เข้าสู่ระบบ</button>
     <p id="loginErr" class="error" role="alert"></p>
+    <p class="small links">
+      <a href="#" id="toSignup">ยังไม่มีบัญชี? สมัครใช้งาน</a>
+      <a href="#" id="toLogin" hidden>มีบัญชีแล้ว? เข้าสู่ระบบ</a>
+      <a href="#" id="toReset">ลืมรหัสผ่าน</a>
+    </p>
   </form>
+</div>
+
+<div id="pending" class="login" hidden>
+  <div class="login-box">
+    <h1>รออนุมัติ</h1>
+    <p>บัญชี <strong id="pendingEmail"></strong> สมัครเรียบร้อยแล้ว</p>
+    <p class="muted">กรุณาแจ้งผู้ดูแลระบบให้กำหนดสิทธิ์ แล้วกลับมาเปิดหน้านี้อีกครั้ง</p>
+    <div class="row"><button class="btn" onclick="location.reload()">ตรวจสอบอีกครั้ง</button><button class="btn ghost" data-logout>ออกจากระบบ</button></div>
+  </div>
 </div>
 
 <div id="app" hidden>
@@ -32,7 +51,7 @@
     </nav>
     <div class="who">
       <span id="roleLabel" class="chip"></span>
-      <button class="btn ghost small" id="logout">ออกจากระบบ</button>
+      <button class="btn ghost small" data-logout>ออกจากระบบ</button>
     </div>
   </header>
 
@@ -54,6 +73,10 @@
 <div id="tooltip" class="tooltip" hidden></div>
 <dialog id="dlg"></dialog>
 <div id="toast" class="toast" hidden></div>
-<script src="/static/app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="static/config.js"></script>
+<script src="static/classifier.js"></script>
+<script src="static/backend.js"></script>
+<script src="static/app.js"></script>
 </body>
 </html>

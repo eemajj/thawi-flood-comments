@@ -28,22 +28,18 @@ function toast(msg) {
 }
 function fmtTime(t) {
   if (!t) return "";
-  const [d, h] = t.split(" ");
+  let d, h;
+  if (/[zZ]|[+-]\d\d:?\d\d$/.test(t)) {
+    // เวลาระบบ (มีเขตเวลา) → แสดงเป็นเวลาไทย
+    const x = new Date(t);
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit",
+      day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(x).map(o => [o.type, o.value]));
+    d = `${p.year}-${p.month}-${p.day}`; h = `${p.hour}:${p.minute}`;
+  } else {
+    [d, h] = t.replace("T", " ").split(" ");
+  }
   const [y, m, dd] = d.split("-");
   return `${+dd}/${+m}/${+y + 543} ${(h || "").slice(0, 5)}`;
-}
-
-async function api(path, body) {
-  const opt = body === undefined ? {} : {
-    method: "POST", body: JSON.stringify(body),
-    headers: { "Content-Type": "application/json", "X-Requested-With": "app" },
-  };
-  const r = await fetch(path, opt);
-  let data = {};
-  try { data = await r.json(); } catch { /* empty */ }
-  if (r.status === 401 && path !== "/api/login") { showLogin(); throw new Error("login"); }
-  if (!r.ok) throw new Error(data.error || `ผิดพลาด (${r.status})`);
-  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,29 +68,69 @@ function isoDate(d) {
 // ---------------------------------------------------------------------------
 // เข้าสู่ระบบ
 // ---------------------------------------------------------------------------
-function showLogin() {
-  $("#app").hidden = true; $("#login").hidden = false; $("#pw").focus();
+let LOGIN_MODE = "login";
+function showLogin(msg) {
+  S.role = null;
+  $("#app").hidden = true; $("#pending").hidden = true; $("#login").hidden = false;
+  if (msg) $("#loginMsg").textContent = msg;
+  setLoginMode(LOGIN_MODE);
 }
+function setLoginMode(mode) {
+  LOGIN_MODE = mode;
+  $("#nameRow").hidden = mode !== "signup";
+  $("#pwRow").hidden = mode === "reset";
+  $("#pw").autocomplete = mode === "signup" ? "new-password" : "current-password";
+  $("#loginBtn").textContent = { login: "เข้าสู่ระบบ", signup: "สมัครใช้งาน", reset: "ส่งลิงก์ตั้งรหัสผ่านใหม่" }[mode];
+  $("#toSignup").hidden = mode === "signup"; $("#toLogin").hidden = mode === "login"; $("#toReset").hidden = mode !== "login";
+  $("#loginErr").textContent = "";
+}
+$("#toSignup").addEventListener("click", e => { e.preventDefault(); setLoginMode("signup"); });
+$("#toLogin").addEventListener("click", e => { e.preventDefault(); setLoginMode("login"); });
+$("#toReset").addEventListener("click", e => { e.preventDefault(); setLoginMode("reset"); });
 $("#loginForm").addEventListener("submit", async e => {
   e.preventDefault();
-  $("#loginErr").textContent = "";
+  $("#loginErr").textContent = ""; $("#loginMsg").textContent = "";
+  const email = $("#email").value.trim(), password = $("#pw").value;
+  const btn = $("#loginBtn"); btn.disabled = true;
   try {
-    const r = await api("/api/login", { password: $("#pw").value });
+    if (LOGIN_MODE === "signup") {
+      if (password.length < 8) throw new Error("รหัสผ่านต้องยาวอย่างน้อย 8 ตัวอักษร");
+      const r = await api("/api/signup", { email, password, name: $("#name").value.trim() });
+      if (r.needConfirm) { setLoginMode("login"); $("#loginMsg").textContent = "สมัครแล้ว — เปิดลิงก์ยืนยันในอีเมล แล้วกลับมาเข้าสู่ระบบ"; return; }
+      return boot();
+    }
+    if (LOGIN_MODE === "reset") {
+      await api("/api/reset", { email });
+      setLoginMode("login"); $("#loginMsg").textContent = "ส่งลิงก์ไปที่อีเมลแล้ว เปิดลิงก์เพื่อตั้งรหัสผ่านใหม่";
+      return;
+    }
+    await api("/api/login", { email, password });
     $("#pw").value = "";
-    await start(r.role);
+    await boot();
   } catch (err) { $("#loginErr").textContent = err.message; }
+  finally { btn.disabled = false; }
 });
-$("#logout").addEventListener("click", async () => {
-  await api("/api/logout", {}); S.role = null; showLogin();
-});
+$$("[data-logout]").forEach(b => b.addEventListener("click", async () => { await api("/api/logout", {}); showLogin(); }));
+
+async function boot() {
+  const me = await api("/api/me");
+  if (!me.role) return showLogin();
+  if (me.role === "pending") {
+    $("#login").hidden = true; $("#app").hidden = true; $("#pending").hidden = false;
+    $("#pendingEmail").textContent = me.email;
+    return;
+  }
+  S.me = me;
+  await start(me.role);
+}
 
 async function start(role) {
   S.role = role;
   document.body.classList.toggle("viewer", role !== "admin");
-  $("#roleLabel").textContent = role === "admin" ? "ผู้ดูแล" : "ผู้ดู";
-  $("#login").hidden = true; $("#app").hidden = false;
+  $("#roleLabel").textContent = `${S.me?.name || S.me?.email || ""} · ${role === "admin" ? "ผู้ดูแล" : "ผู้ดู"}`;
+  $("#login").hidden = true; $("#pending").hidden = true; $("#app").hidden = false;
   await loadMeta();
-  if (!location.hash) location.hash = "#dashboard";
+  if (!location.hash || !PAGES[location.hash.slice(1).split("?")[0]]) location.hash = "#dashboard";
   route();
 }
 
@@ -202,8 +238,8 @@ async function renderDashboard() {
     <div class="section-head">
       <h2>ภาพรวม</h2>
       <div class="row">
-        <a class="btn small" href="/api/export?${qs({ ...f, type: "exec" })}">⬇ สรุปผู้บริหาร (ไม่มีชื่อ)</a>
-        <a class="btn small" href="/api/export?${qs({ ...f, type: "ops" })}">⬇ รายงานปฏิบัติการ (ภายใน)</a>
+        <button class="btn small" data-export="exec">⬇ สรุปผู้บริหาร (ไม่มีชื่อ)</button>
+        <button class="btn small" data-export="ops">⬇ รายงานปฏิบัติการ (ภายใน)</button>
       </div>
     </div>
     <div class="kpis">
@@ -251,6 +287,8 @@ async function renderDashboard() {
           </tbody></table></div>` : `<p class="empty">ยังไม่มีข้อมูลสถานที่</p>`}
       </div>
     </div>`;
+  $$("[data-export]").forEach(btn => btn.addEventListener("click", () =>
+    exportReport(btn.dataset.export, f).catch(e => toast(e.message))));
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +310,7 @@ async function renderList() {
   const depts = [...new Set(S.meta.categories.map(c => c.dept).filter(d => d !== "-"))];
   view().innerHTML = `
     <div class="section-head"><h2>รายการปัญหา</h2>
-      <a class="btn small" id="expOps" href="#">⬇ ส่งออกรายการนี้ (CSV)</a></div>
+      <button class="btn small" id="expOps">⬇ ส่งออกรายการนี้ (CSV)</button></div>
     <div class="card row" style="margin-bottom:12px;align-items:flex-end">
       <label>ค้นหา<input id="lq" value="${esc(p.q || "")}" placeholder="ข้อความ / ซอย / ชื่อ"></label>
       <label>หมวด<select id="lcat">${opt(catOpts(), p.category, "ทุกหมวด")}</select></label>
@@ -287,7 +325,7 @@ async function renderList() {
       urgency: $("#lurg").value, status: $("#lst").value, open: $("#lopen").checked ? 1 : "" };
     history.replaceState(null, "", "#list?" + qs(np));
     loadItems("problems", { ...filters(), ...np }, $("#lres"), 1);
-    $("#expOps").href = "/api/export?" + qs({ ...filters(), ...np, type: "ops" });
+    $("#expOps").onclick = () => exportReport("ops", { ...filters(), ...np }).catch(e => toast(e.message));
   };
   ["#lcat", "#ldept", "#lurg", "#lst", "#lopen"].forEach(id => $(id).addEventListener("change", apply));
   let t; $("#lq").addEventListener("input", () => { clearTimeout(t); t = setTimeout(apply, 350); });
@@ -390,10 +428,10 @@ function bindItems(box, reload, viewName) {
 async function showHistory(id) {
   const h = await api("/api/history?id=" + encodeURIComponent(id));
   const names = { is_problem: "เป็นปัญหา", category: "หมวด", urgency: "ความเร่งด่วน", location: "สถานที่", review: "ตรวจทาน", status: "สถานะ", note: "หมายเหตุ" };
-  const show = (f, v) => f === "category" ? S.catName[v] || v : f === "urgency" ? S.urgName[v] || v : v;
+  const show = (f, v) => f === "is_problem" ? (v === "true" ? "ใช่" : v === "false" ? "ไม่ใช่" : v) : f === "category" ? S.catName[v] || v : f === "urgency" ? S.urgName[v] || v : v;
   const d = $("#dlg");
-  d.innerHTML = `<h3>ประวัติการแก้ไข</h3>${h.length ? `<div class="tbl-wrap"><table><thead><tr><th>เวลา</th><th>รายการ</th><th>จาก</th><th>เป็น</th></tr></thead><tbody>
-    ${h.map(x => `<tr><td class="small">${fmtTime(x.at)}</td><td>${esc(names[x.field] || x.field)}</td><td>${esc(show(x.field, x.old_value) ?? "")}</td><td>${esc(show(x.field, x.new_value) ?? "")}</td></tr>`).join("")}
+  d.innerHTML = `<h3>ประวัติการแก้ไข</h3>${h.length ? `<div class="tbl-wrap"><table><thead><tr><th>เวลา</th><th>โดย</th><th>รายการ</th><th>จาก</th><th>เป็น</th></tr></thead><tbody>
+    ${h.map(x => `<tr><td class="small">${fmtTime(x.at)}</td><td class="small">${esc(x.user_email || "-")}</td><td>${esc(names[x.field] || x.field)}</td><td>${esc(show(x.field, x.old_value) ?? "")}</td><td>${esc(show(x.field, x.new_value) ?? "")}</td></tr>`).join("")}
     </tbody></table></div>` : `<p class="empty">ยังไม่มีการแก้ไข</p>`}
     <div class="row" style="justify-content:flex-end;margin-top:1rem"><button class="btn" id="dlgClose">ปิด</button></div>`;
   d.showModal(); $("#dlgClose").onclick = () => d.close();
@@ -487,9 +525,7 @@ async function runImport(files, post, box) {
 }
 
 function hoursSince(t) {
-  if (!t || !S.meta.now) return null;
-  const p = s => new Date(s.replace(" ", "T"));
-  return (p(S.meta.now) - p(t)) / 36e5;
+  return t ? (Date.now() - new Date(t)) / 36e5 : null;
 }
 function agoText(h) {
   if (h == null) return "";
@@ -648,14 +684,18 @@ async function renderSettings() {
     <div class="row" style="margin:12px 0 28px"><button class="btn primary" id="saveKw">บันทึกและคัดกรองใหม่</button></div>
 
     <div class="grid g2">
+      <div class="card" style="grid-column:1/-1">
+        <h3>ผู้ใช้งาน</h3>
+        <p class="muted small">ผู้ใช้สมัครเองที่หน้าเข้าสู่ระบบ แล้วจะ "รออนุมัติ" จนกว่าผู้ดูแลกำหนดสิทธิ์ · ผู้ดู = อ่านอย่างเดียว · ผู้ดูแล = แก้ไข/นำเข้า/จัดการผู้ใช้</p>
+        <div id="users"><p class="muted">กำลังโหลด…</p></div>
+      </div>
       <div class="card">
-        <h3>เปลี่ยนรหัสผ่าน</h3>
+        <h3>เปลี่ยนรหัสผ่านของฉัน</h3>
         <div class="row" style="align-items:flex-end">
-          <label>สิทธิ์<select id="pwRole"><option value="viewer">ผู้ดู (ผู้บริหาร/ฝ่ายต่างๆ)</option><option value="admin">ผู้ดูแล</option></select></label>
-          <label>รหัสผ่านใหม่<input id="pwNew" type="text" minlength="6" autocomplete="new-password"></label>
+          <label>รหัสผ่านใหม่<input id="pwNew" type="password" minlength="8" autocomplete="new-password"></label>
           <button class="btn" id="savePw">บันทึก</button>
         </div>
-        <p class="muted small">อย่างน้อย 6 ตัวอักษร · เปลี่ยนแล้วผู้ใช้สิทธิ์นั้นที่เปิดค้างไว้ต้องเข้าระบบใหม่</p>
+        <p class="muted small">อย่างน้อย 8 ตัวอักษร</p>
       </div>
       <div class="card">
         <h3>ลบข้อมูลส่วนบุคคล (PDPA)</h3>
@@ -672,7 +712,7 @@ async function renderSettings() {
     toast(`บันทึกแล้ว · คัดกรองใหม่ ${r.reclassified} รายการ`); refreshBadge();
   });
   $("#savePw").addEventListener("click", async () => {
-    try { await api("/api/password", { role: $("#pwRole").value, password: $("#pwNew").value }); $("#pwNew").value = ""; toast("เปลี่ยนรหัสผ่านแล้ว"); }
+    try { await api("/api/password", { password: $("#pwNew").value }); $("#pwNew").value = ""; toast("เปลี่ยนรหัสผ่านแล้ว"); }
     catch (e) { toast(e.message); }
   });
   $("#purge").addEventListener("click", async () => {
@@ -681,6 +721,21 @@ async function renderSettings() {
     const r = await api("/api/purge", { before: b });
     toast(`ลบข้อมูลส่วนบุคคลแล้ว ${r.count} รายการ`);
   });
+  loadUsers();
+}
+
+async function loadUsers() {
+  const users = await api("/api/users");
+  const roleOpts = [["admin", "ผู้ดูแล"], ["viewer", "ผู้ดู"], ["pending", "รออนุมัติ / ระงับ"]];
+  $("#users").innerHTML = `<div class="tbl-wrap"><table><thead><tr><th>ชื่อ</th><th>อีเมล</th><th>สมัครเมื่อ</th><th>สิทธิ์</th></tr></thead><tbody>
+    ${users.map(u => `<tr class="${u.role === "pending" ? "pending-row" : ""}"><td>${esc(u.display_name || "-")}</td><td>${esc(u.email)}</td>
+      <td class="small">${fmtTime(u.created_at)}</td>
+      <td><select data-user="${esc(u.user_id)}" ${u.user_id === S.me?.id ? "" : ""}>${opt(roleOpts, u.role)}</select></td></tr>`).join("")}
+    </tbody></table></div>`;
+  $$("[data-user]").forEach(sel => sel.addEventListener("change", async () => {
+    try { await api("/api/users", { user: sel.dataset.user, role: sel.value }); toast("บันทึกสิทธิ์แล้ว"); }
+    catch (e) { toast(e.message); loadUsers(); }
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -697,6 +752,19 @@ document.addEventListener("mousemove", e => {
 // เริ่มต้น
 (async () => {
   loadFilters();
-  const me = await api("/api/me");
-  if (me.role) start(me.role); else showLogin();
+  if (!CONFIGURED) {
+    $("#login").hidden = false;
+    $("#loginForm").innerHTML = `<h1>ยังไม่ได้ตั้งค่าระบบ</h1><p class="muted">ใส่ Supabase URL และ key ในไฟล์ <code>docs/static/config.js</code> ตามคู่มือใน README</p>`;
+    return;
+  }
+  sb.auth.onAuthStateChange(async (event) => {
+    if (event === "PASSWORD_RECOVERY") {
+      const pw = prompt("ตั้งรหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร)");
+      if (pw) {
+        try { await api("/api/password", { password: pw }); toast("ตั้งรหัสผ่านใหม่แล้ว"); boot(); }
+        catch (e) { alert(e.message); }
+      }
+    }
+  });
+  try { await boot(); } catch (e) { if (e.message !== "login") showLogin(e.message); }
 })();
